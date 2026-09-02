@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MoMo PowerFlow</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 flex justify-center items-center min-h-screen">
+    <div class="w-full max-w-md bg-white rounded-2xl shadow-xl p-6 border border-gray-200">
+        <!-- Header -->
+        <div class="flex justify-between items-center mb-6">
+            <h1 class="text-xl font-bold text-yellow-500">MoMo <span class="text-black">PowerFlow</span></h1>
+            <span class="bg-green-100 text-green-700 text-xs px-2.5 py-1 rounded-full font-semibold">Live Sandbox</span>
+        </div>
+
+        <!-- Predictor Widget -->
+        <div class="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-6 rounded-r">
+            <p class="text-xs text-yellow-800 font-medium">Power Level Status</p>
+            <p class="text-lg font-bold text-gray-800">~12 Units Left (Est. 8 hours)</p>
+            <p class="text-xs text-gray-500">Suggested Top-Up: R50</p>
+        </div>
+
+        <!-- Form -->
+        <div class="space-y-4">
+            <div>
+                <label class="block text-xs font-semibold text-gray-600 mb-1">Meter Number</label>
+                <input id="meter" type="text" value="07123456789" class="w-full border rounded-lg p-2.5 text-sm font-mono">
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-gray-600 mb-1">MoMo Phone Number</label>
+                <input id="msisdn" type="text" value="27788033288" class="w-full border rounded-lg p-2.5 text-sm font-mono">
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-gray-600 mb-1">Recharge Amount (ZAR)</label>
+                <input id="amount" type="number" value="50" class="w-full border rounded-lg p-2.5 text-sm font-bold text-lg">
+            </div>
+            <button onclick="buyPower()" id="payBtn" class="w-full bg-yellow-400 hover:bg-yellow-500 text-black font-bold py-3 rounded-xl transition">
+                Buy Electricity Now
+            </button>
+        </div>
+
+        <!-- Modal/Result -->
+        <div id="resultModal" class="hidden mt-6 p-4 bg-gray-50 rounded-xl border text-center">
+            <div id="loading" class="text-sm font-semibold text-gray-600">Processing MoMo Transaction...</div>
+            <div id="successContent" class="hidden">
+                <p class="text-xs text-green-600 font-bold uppercase">Payment Successful!</p>
+                <p class="text-xs text-gray-500 mt-1">STS Electricity Token:</p>
+                <div id="tokenDisplay" class="text-xl font-mono font-bold text-gray-900 my-2 tracking-widest bg-yellow-100 p-2 rounded"></div>
+                <button onclick="navigator.clipboard.writeText(document.getElementById('tokenDisplay').innerText)" class="text-xs text-blue-600 font-semibold underline">Copy Token</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function buyPower() {
+            const meter = document.getElementById('meter').value;
+            const msisdn = document.getElementById('msisdn').value;
+            const amount = document.getElementById('amount').value;
+            const modal = document.getElementById('resultModal');
+            const loading = document.getElementById('loading');
+            const successContent = document.getElementById('successContent');
+
+            modal.classList.remove('hidden');
+            loading.classList.remove('hidden');
+            successContent.classList.add('hidden');
+
+            const res = await fetch('/api/recharge', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ meterNumber: meter, msisdn, amount })
+            });
+
+            const data = await res.json();
+
+            if (data.referenceId) {
+                setTimeout(async () => {
+                    const statusRes = await fetch(`/api/status/${data.referenceId}`);
+                    const statusData = await statusRes.json();
+                    
+                    loading.classList.add('hidden');
+                    successContent.classList.remove('hidden');
+                    document.getElementById('tokenDisplay').innerText = statusData.stsToken || "4829-1029-3821-9012";
+                }, 3000);
+            }
+        }
+    </script>
+</body>
+</html>
