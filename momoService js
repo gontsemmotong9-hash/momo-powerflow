@@ -1,0 +1,188 @@
+const axios = require('axios');
+const { v4: uuidv4 } = require('uuid');
+
+class MomoService {
+  constructor() {
+    this.baseUrl = process.env.MOMO_BASE_URL;
+    this.apiUser = process.env.MOMO_API_USER;
+    this.apiKey = process.env.MOMO_API_KEY;
+    this.collectionSubKey = process.env.MOMO_COLLECTION_SUBSCRIPTION_KEY;
+    this.disbursementSubKey = process.env.MOMO_DISBURSEMENT_SUBSCRIPTION_KEY;
+    this.targetEnv = process.env.MOMO_TARGET_ENV;
+    this.callbackUrl = process.env.MOMO_CALLBACK_URL;
+    this.currency = process.env.MOMO_CURRENCY;
+    
+    this.accessToken = null;
+    this.tokenExpiry = null;
+  }
+
+  /**
+   * Generates or returns a cached OAuth 2.0 Bearer Token
+   */
+  async getAccessToken() {
+    if (this.accessToken && this.tokenExpiry && Date.now() < this.tokenExpiry) {
+      return this.accessToken;
+    }
+
+    const authHeader = Buffer.from(`${this.apiUser}:${this.apiKey}`).toString('base64');
+
+    try {
+      const response = await axios.post(
+        `${this.baseUrl}/collection/token/`,
+        {},
+        {
+          headers: {
+            'Authorization': `Basic ${authHeader}`,
+            'Ocp-Apim-Subscription-Key': this.collectionSubKey,
+            'X-Target-Environment': this.targetEnv,
+          },
+        }
+      );
+
+      this.accessToken = response.data.access_token;
+      // Cache token duration (subtracting 60s safety buffer)
+      this.tokenExpiry = Date.now() + (response.data.expires_in - 60) * 1000;
+      return this.accessToken;
+    } catch (error) {
+      console.error('Error fetching access token:', error.response?.data || error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * 1. GET PAID: Initiate Request to Pay (Debit Customer Account)
+   */
+  async requestToPay({ amount, msisdn, externalId, payerMessage, payeeNote }) {
+    const token = await this.getAccessToken();
+    const referenceId = uuidv4(); // Unique transaction reference
+
+    const payload = {
+      amount: amount.toString(),
+      currency: this.currency,
+      externalId: externalId,
+      payer: {
+        partyIdType: 'MSISDN',
+        partyId: msisdn,
+      },
+      payerMessage: payerMessage || 'Payment Request',
+      payeeNote: payeeNote || 'Payment Request',
+    };
+
+    try {
+      await axios.post(
+        `${this.baseUrl}/collection/v1_0/requesttopay`,
+        payload,
+        {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'X-Reference-Id': referenceId,
+            'X-Target-Environment': this.targetEnv,
+            'Ocp-Apim-Subscription-Key': this.collectionSubKey,
+            'X-Callback-Url': this.callbackUrl,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      // Returns HTTP 202 Accepted alongside the referenceId to track payment status
+      return { referenceId, status: 'PENDING' };
+    } catch (error) {
+      console.error('RequestToPay Failed:', error.response?.data || error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Check status of a Request to Pay transaction
+   */
+  async getPaymentStatus(referenceId) {
+    const token = await this.getAccessToken();
+
+    try {
+      const response = await axios.get(
+        `${this.baseUrl}/collection/v1_0/requesttopay/${referenceId}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'X-Target-Environment': this.targetEnv,
+            'Ocp-Apim-Subscription-Key': this.collectionSubKey,
+          },
+        }
+      );
+
+      return response.data;
+    } catch (error) {
+      console.error('Get Payment Status Failed:', error.response?.data || error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * 2. PAY / DISBURSEMENT: Transfer Money to Customer or Merchant
+   */
+  async transfer({ amount, msisdn, externalId, payerMessage, payeeNote }) {
+    const token = await this.getAccessToken();
+    const referenceId = uuidv4();
+
+    const payload = {
+      amount: amount.toString(),
+      currency: this.currency,
+      externalId: externalId,
+      payee: {
+        partyIdType: 'MSISDN',
+        partyId: msisdn,
+      },
+      payerMessage: payerMessage || 'Transfer',
+      payeeNote: payeeNote || 'Transfer',
+    };
+
+    try {
+      await axios.post(
+        `${this.baseUrl}/disbursement/v1_0/transfer`,
+        payload,
+        {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'X-Reference-Id': referenceId,
+            'X-Target-Environment': this.targetEnv,
+            'Ocp-Apim-Subscription-Key': this.disbursementSubKey,
+            'X-Callback-Url': this.callbackUrl,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      return { referenceId, status: 'PENDING' };
+    } catch (error) {
+      console.error('Transfer Failed:', error.response?.data || error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * 3. ACCOUNT VALIDATION: Validate if MSISDN is Active on MoMo
+   */
+  async isAccountActive(msisdn) {
+    const token = await this.getAccessToken();
+
+    try {
+      const response = await axios.get(
+        `${this.baseUrl}/disbursement/v1_0/accountholder/msisdn/${msisdn}/active`,
+        {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'X-Target-Environment': this.targetEnv,
+            'Ocp-Apim-Subscription-Key': this.disbursementSubKey,
+          },
+        }
+      );
+
+      return response.data.result; // Returns boolean true/false
+    } catch (error) {
+      console.error('Account Check Failed:', error.response?.data || error.message);
+      throw error;
+    }
+  }
+}
+
+module.exports = new MomoService();
