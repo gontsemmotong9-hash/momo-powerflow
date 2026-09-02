@@ -1,0 +1,96 @@
+require('dotenv').config();
+const express = require('express');
+const axios = require('axios');
+const { v4: uuidv4 } = require('uuid');
+
+const app = express();
+app.use(express.json());
+app.use(express.static('public'));
+
+const CONFIG = {
+    host: process.env.MOMO_HOST,
+    subKey: process.env.MOMO_SUBSCRIPTION_KEY,
+    targetEnv: process.env.MOMO_TARGET_ENV,
+    apiUser: process.env.MOMO_API_USER,
+    apiKey: process.env.MOMO_API_KEY
+};
+
+// 1. Generate Access Token
+async function getAccessToken() {
+    const authString = Buffer.from(`${CONFIG.apiUser}:${CONFIG.apiKey}`).toString('base64');
+    const response = await axios.post(`https://${CONFIG.host}/collection/token/`, {}, {
+        headers: {
+            'Ocp-Apim-Subscription-Key': CONFIG.subKey,
+            'X-Target-Environment': CONFIG.targetEnv,
+            'Authorization': `Basic ${authString}`
+        }
+    });
+    return response.data.access_token;
+}
+
+// 2. Route: Request To Pay (Initiate Top-Up)
+app.post('/api/recharge', async (req, res) => {
+    try {
+        const { msisdn, amount, meterNumber } = req.body;
+        const accessToken = await getAccessToken();
+        const referenceId = uuidv4();
+
+        const payload = {
+            amount: amount.toString(),
+            currency: "ZAR",
+            externalId: Math.floor(100000 + Math.random() * 900000).toString(),
+            payer: {
+                partyIdType: "MSISDN",
+                partyId: msisdn
+            },
+            payerMessage: `Meter ${meterNumber} Recharge`,
+            payeeNote: `Electricity Token Purchase`
+        };
+
+        await axios.post(`https://${CONFIG.host}/collection/v1_0/requesttopay`, payload, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'X-Reference-Id': referenceId,
+                'X-Target-Environment': CONFIG.targetEnv,
+                'Ocp-Apim-Subscription-Key': CONFIG.subKey,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        res.json({ success: true, referenceId });
+    } catch (error) {
+        res.status(500).json({ error: error.response ? error.response.data : error.message });
+    }
+});
+
+// 3. Route: Check Status & Generate Token
+app.get('/api/status/:referenceId', async (req, res) => {
+    try {
+        const { referenceId } = req.params;
+        const accessToken = await getAccessToken();
+
+        const response = await axios.get(`https://${CONFIG.host}/collection/v1_0/requesttopay/${referenceId}`, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'X-Target-Environment': CONFIG.targetEnv,
+                'Ocp-Apim-Subscription-Key': CONFIG.subKey
+            }
+        });
+
+        const status = response.data.status || "SUCCESSFUL";
+
+        // Generate mock 20-digit STS Electricity Token when payment is successful
+        let stsToken = null;
+        if (status === "SUCCESSFUL" || status === "SUCCESS") {
+            stsToken = Array.from({ length: 5 }, () => Math.floor(1000 + Math.random() * 9000)).join('-');
+        }
+
+        res.json({ status, stsToken, data: response.data });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.listen(process.env.PORT, () => {
+    console.log(`MoMo PowerFlow App running at http://localhost:${process.env.PORT}`);
+});
